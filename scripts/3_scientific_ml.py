@@ -6,9 +6,10 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error
+from sklearn.utils.class_weight import compute_class_weight
 from prophet import Prophet
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
 from tensorflow.keras.utils import to_categorical
 import joblib
 import json
@@ -86,7 +87,7 @@ print("Après préparation :", df.shape)
 # 3. RÉGRESSION : PROPHET vs LSTM
 # =============================================
 print("\nÉTAPE 3 : Régression")
-sequence_length = 30
+sequence_length = 60  # AMÉLIORÉ
 scaler = StandardScaler()
 values_scaled = scaler.fit_transform(df['value'].values.reshape(-1, 1))
 
@@ -118,14 +119,15 @@ X_train_l, X_test_l = X_seq[:train_size_lstm], X_seq[train_size_lstm:]
 y_train_l, y_test_l = y_seq[:train_size_lstm], y_seq[train_size_lstm:]
 
 model_lstm_reg = Sequential([
-    LSTM(50, return_sequences=True, input_shape=(sequence_length, 1)),
-    Dropout(0.2),
-    LSTM(50),
-    Dropout(0.2),
+    Bidirectional(LSTM(64, return_sequences=True, input_shape=(sequence_length, 1))),
+    Dropout(0.3),
+    Bidirectional(LSTM(64)),
+    Dropout(0.3),
+    Dense(32, activation='relu'),
     Dense(1)
 ])
 model_lstm_reg.compile(optimizer='adam', loss='mse')
-model_lstm_reg.fit(X_train_l, y_train_l, epochs=15, batch_size=32, verbose=0)
+model_lstm_reg.fit(X_train_l, y_train_l, epochs=30, batch_size=32, verbose=0)
 
 pred_lstm_reg = scaler.inverse_transform(model_lstm_reg.predict(X_test_l)).flatten()
 mae_lstm_reg = mean_absolute_error(scaler.inverse_transform(y_test_l), pred_lstm_reg)
@@ -144,11 +146,20 @@ y_cls_encoded = le.fit_transform(y_cls)
 
 X_train_rf, X_test_rf, y_train_rf, y_test_rf = train_test_split(X_cls, y_cls_encoded, test_size=0.2, shuffle=False)
 
-rf = RandomForestClassifier(n_estimators=200, max_depth=10, random_state=42)
+# Class weights
+class_weights = compute_class_weight('balanced', classes=np.unique(y_train_rf), y=y_train_rf)
+class_weight_dict = dict(zip(np.unique(y_train_rf), class_weights))
+
+rf = RandomForestClassifier(n_estimators=500, class_weight='balanced', random_state=42)
 rf.fit(X_train_rf, y_train_rf)
 pred_rf = rf.predict(X_test_rf)
 acc_rf = (pred_rf == y_test_rf).mean()
 print("RF Accuracy:", round(acc_rf, 3))
+
+# Feature importance
+importances = rf.feature_importances_
+feat_imp = pd.Series(importances, index=features_cls).sort_values(ascending=False)
+print("Top 5 features:", feat_imp.head(5).to_dict())
 
 # LSTM Classification
 X_seq_cls, _ = create_sequences(df[features_cls].values, sequence_length)
@@ -159,14 +170,15 @@ X_train_cl, X_test_cl = X_seq_cls[:train_size_cls], X_seq_cls[train_size_cls:]
 y_train_cl, y_test_cl = y_seq_cls_cat[:train_size_cls], y_seq_cls_cat[train_size_cls:]
 
 model_lstm_cls = Sequential([
-    LSTM(50, return_sequences=True, input_shape=(sequence_length, X_seq_cls.shape[2])),
-    Dropout(0.2),
-    LSTM(50),
-    Dropout(0.2),
+    Bidirectional(LSTM(64, return_sequences=True, input_shape=(sequence_length, X_seq_cls.shape[2]))),
+    Dropout(0.3),
+    Bidirectional(LSTM(64)),
+    Dropout(0.3),
+    Dense(32, activation='relu'),
     Dense(5, activation='softmax')
 ])
 model_lstm_cls.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-model_lstm_cls.fit(X_train_cl, y_train_cl, epochs=15, batch_size=32, verbose=0)
+model_lstm_cls.fit(X_train_cl, y_train_cl, epochs=30, batch_size=32, verbose=0)
 
 pred_lstm_cls = np.argmax(model_lstm_cls.predict(X_test_cl), axis=1)
 acc_lstm_cls = (pred_lstm_cls == np.argmax(y_test_cl, axis=1)).mean()
@@ -194,11 +206,17 @@ else:
     future_df['ds'] = [last_date]
     pred_tomorrow = float(model_prophet.predict(future_df)['yhat'].iloc[0])
 
-if best_cls == "LSTM":
-    pred_class_idx = np.argmax(model_lstm_cls.predict(last_seq.reshape(1, sequence_length, -1)), axis=1)[0]
-    pred_class = le.inverse_transform([pred_class_idx])[0]
+# Ensembling
+rf_pred = rf.predict_proba(X_cls.iloc[-1:].values)[0]
+lstm_input = df[features_cls].iloc[-sequence_length:].values.reshape(1, sequence_length, -1)
+lstm_pred = model_lstm_cls.predict(lstm_input)[0]
+
+if rf_pred.max() > 0.7:
+    pred_class = le.inverse_transform([np.argmax(rf_pred)])[0]
+elif lstm_pred.max() > 0.8:
+    pred_class = le.inverse_transform([np.argmax(lstm_pred)])[0]
 else:
-    pred_class = le.inverse_transform(rf.predict(X_cls.iloc[-1:].values))[0]
+    pred_class = "Neutral"
 
 result = {
     "predicted_score": round(pred_tomorrow, 1),

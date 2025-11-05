@@ -1,0 +1,6 @@
+{
+  "predicted_score": 25.0,
+  "predicted_class": "Neutral",
+  "best_regression": "LSTM",
+  "best_classification": "RF"
+}
