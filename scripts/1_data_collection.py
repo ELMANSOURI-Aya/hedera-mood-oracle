@@ -6,7 +6,7 @@ from datetime import datetime
 
 def fetch_fear_greed():
     print("Récupération des données Fear & Greed depuis alternative.me...")
-    
+
     url = "https://api.alternative.me/fng/?limit=0"
     try:
         response = requests.get(url, timeout=10)
@@ -35,7 +35,7 @@ def fetch_fear_greed():
     print(f"Fichier sauvgardé : data/fear_greed_data.csv")
     print("\nDernières 5 lignes :")
     print(df.tail(5)[['timestamp', 'value', 'classification']].to_string(index=False))
-    
+
     return df
 
 if __name__ == "__main__":
