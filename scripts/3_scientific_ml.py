@@ -16,7 +16,7 @@ from pathlib import Path
 import warnings
 warnings.filterwarnings("ignore")
 
-# === CHEMINS FIXES ===
+# === CHEMINS ===
 BASE_DIR = Path("/content/drive/MyDrive/Hedera Mood Oracle")
 DATA_DIR = BASE_DIR / "data"
 MODELS_DIR = BASE_DIR / "models"
@@ -83,7 +83,7 @@ df = df.dropna().reset_index(drop=True)
 print("Après préparation :", df.shape)
 
 # =============================================
-# 3. RÉGRESSION
+# 3. RÉGRESSION : PROPHET vs LSTM
 # =============================================
 print("\nÉTAPE 3 : Régression")
 sequence_length = 30
@@ -132,7 +132,7 @@ mae_lstm_reg = mean_absolute_error(scaler.inverse_transform(y_test_l), pred_lstm
 print("LSTM MAE:", round(mae_lstm_reg, 2))
 
 # =============================================
-# 4. CLASSIFICATION
+# 4. CLASSIFICATION : RF vs LSTM
 # =============================================
 print("\nÉTAPE 4 : Classification")
 features_cls = [c for c in df.columns if c not in ['timestamp', 'value', 'classification', 'class_5']]
@@ -183,7 +183,7 @@ joblib.dump(rf if best_cls == "RF" else model_lstm_cls, MODELS_DIR / "best_class
 joblib.dump(scaler, MODELS_DIR / "scaler.pkl")
 joblib.dump(le, MODELS_DIR / "label_encoder.pkl")
 
-# PRÉDICTION DEMAIN (100% CORRIGÉ)
+# PRÉDICTION DEMAIN
 last_date = df['timestamp'].iloc[-1] + pd.Timedelta(days=1)
 last_seq = values_scaled[-sequence_length:].reshape(1, sequence_length, 1)
 
