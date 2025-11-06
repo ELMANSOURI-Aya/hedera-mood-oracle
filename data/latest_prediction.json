@@ -1,6 +1,6 @@
 {
-  "predicted_score": 25.0,
+  "predicted_score": 26.2,
   "predicted_class": "Extreme Fear",
-  "best_regression": "LSTM",
-  "best_classification": "RF"
+  "mae_lstm": 5.12,
+  "accuracy_rf": 0.752
 }

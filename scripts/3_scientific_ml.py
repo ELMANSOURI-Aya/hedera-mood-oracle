@@ -1,5 +1,5 @@
 # ==============================
-# 3_scientific_ml.py — VERSION FINALE
+# 3_scientific_ml.py — VERSION ULTRA-OPTIMISÉE (LSTM + RF ONLY)
 # ==============================
 import pandas as pd
 import numpy as np
@@ -10,10 +10,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error
 from sklearn.utils.class_weight import compute_class_weight
-from prophet import Prophet
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
-from tensorflow.keras.utils import to_categorical
 import joblib
 import json
 from pathlib import Path
@@ -83,28 +81,13 @@ df = df.dropna().reset_index(drop=True)
 print("Après préparation :", df.shape)
 
 # =============================================
-# 3. RÉGRESSION : PROPHET vs LSTM (ENSEMBLE DYNAMIQUE)
+# 3. RÉGRESSION : LSTM SEULEMENT (LE MEILLEUR)
 # =============================================
-print("\nÉTAPE 3 : Régression")
+print("\nÉTAPE 3 : Régression (LSTM uniquement)")
 sequence_length = 60
 scaler = StandardScaler()
 values_scaled = scaler.fit_transform(df['value'].values.reshape(-1, 1))
 
-# Prophet
-prophet_df = df[['timestamp', 'value']].copy()
-prophet_df.columns = ['ds', 'y']
-train_size = int(len(prophet_df) * 0.8)
-train_p, test_p = prophet_df.iloc[:train_size], prophet_df.iloc[train_size:]
-
-model_prophet = Prophet(daily_seasonality=True, yearly_seasonality=True)
-model_prophet.fit(train_p)
-future = model_prophet.make_future_dataframe(periods=len(test_p), freq='D')
-forecast = model_prophet.predict(future)
-pred_prophet = forecast.iloc[train_size:]['yhat'].values
-mae_prophet = mean_absolute_error(test_p['y'], pred_prophet)
-print("Prophet MAE:", round(mae_prophet, 2))
-
-# LSTM
 def create_sequences(data, seq_len):
     X, y = [], []
     for i in range(seq_len, len(data)):
@@ -113,11 +96,11 @@ def create_sequences(data, seq_len):
     return np.array(X), np.array(y)
 
 X_seq, y_seq = create_sequences(values_scaled, sequence_length)
-train_size_lstm = int(len(X_seq) * 0.8)
-X_train_l, X_test_l = X_seq[:train_size_lstm], X_seq[train_size_lstm:]
-y_train_l, y_test_l = y_seq[:train_size_lstm], y_seq[train_size_lstm:]
+train_size = int(len(X_seq) * 0.8)
+X_train, X_test = X_seq[:train_size], X_seq[train_size:]
+y_train, y_test = y_seq[:train_size], y_seq[train_size:]
 
-model_lstm_reg = Sequential([
+model_lstm = Sequential([
     Bidirectional(LSTM(64, return_sequences=True, input_shape=(sequence_length, 1))),
     Dropout(0.3),
     Bidirectional(LSTM(64)),
@@ -125,32 +108,24 @@ model_lstm_reg = Sequential([
     Dense(32, activation='relu'),
     Dense(1)
 ])
-model_lstm_reg.compile(optimizer='adam', loss='mse')
-model_lstm_reg.fit(X_train_l, y_train_l, epochs=30, batch_size=32, verbose=0)
+model_lstm.compile(optimizer='adam', loss='mse')
+model_lstm.fit(X_train, y_train, epochs=30, batch_size=32, verbose=0)
 
-pred_lstm_reg = scaler.inverse_transform(model_lstm_reg.predict(X_test_l)).flatten()
-mae_lstm_reg = mean_absolute_error(scaler.inverse_transform(y_test_l), pred_lstm_reg)
-print("LSTM MAE:", round(mae_lstm_reg, 2))
-
-# Ensemble dynamique
-weight_lstm = 1 / (1 + mae_lstm_reg)
-weight_prophet = 1 / (1 + mae_prophet)
-total = weight_lstm + weight_prophet
-pred_ensemble = (weight_lstm * pred_lstm_reg + weight_prophet * pred_prophet) / total
-mae_ensemble = mean_absolute_error(scaler.inverse_transform(y_test_l), pred_ensemble)
-print("Ensemble MAE:", round(mae_ensemble, 2))
+pred_lstm = scaler.inverse_transform(model_lstm.predict(X_test)).flatten()
+mae_lstm = mean_absolute_error(scaler.inverse_transform(y_test), pred_lstm)
+print("LSTM MAE:", round(mae_lstm, 2))
 
 # =============================================
-# 4. CLASSIFICATION : RF vs LSTM
+# 4. CLASSIFICATION : RF SEULEMENT (LE MEILLEUR)
 # =============================================
-print("\nÉTAPE 4 : Classification")
+print("\nÉTAPE 4 : Classification (RF uniquement)")
 features_cls = [c for c in df.columns if c not in ['timestamp', 'value', 'classification', 'class_5']]
 X_cls = df[features_cls]
 y_cls = df['class_5']
 le = LabelEncoder()
-y_cls_encoded = le.fit_transform(y_cls)
+y_encoded = le.fit_transform(y_cls)
 
-X_train_rf, X_test_rf, y_train_rf, y_test_rf = train_test_split(X_cls, y_cls_encoded, test_size=0.2, shuffle=False)
+X_train_rf, X_test_rf, y_train_rf, y_test_rf = train_test_split(X_cls, y_encoded, test_size=0.2, shuffle=False)
 
 class_weights = compute_class_weight('balanced', classes=np.unique(y_train_rf), y=y_train_rf)
 class_weight_dict = dict(zip(np.unique(y_train_rf), class_weights))
@@ -162,97 +137,94 @@ acc_rf = (pred_rf == y_test_rf).mean()
 print("RF Accuracy:", round(acc_rf, 3))
 
 importances = rf.feature_importances_
-feat_imp = pd.Series(importances, index=features_cls).sort_values(ascending=False)
-print("Top 5 features:", feat_imp.head(5).to_dict())
+top_features = pd.Series(importances, index=features_cls).sort_values(ascending=False).head(5)
+print("Top 5 features:", top_features.to_dict())
 
-# LSTM Classification
-X_seq_cls, _ = create_sequences(df[features_cls].values, sequence_length)
-y_seq_cls = le.transform(df['class_5'].iloc[sequence_length:])
-y_seq_cls_cat = to_categorical(y_seq_cls)
-train_size_cls = int(len(X_seq_cls) * 0.8)
-X_train_cl, X_test_cl = X_seq_cls[:train_size_cls], X_seq_cls[train_size_cls:]
-y_train_cl, y_test_cl = y_seq_cls_cat[:train_size_cls], y_seq_cls_cat[train_size_cls:]
+# === AJOUT À LA FIN DE TON SCRIPT (APRÈS LES MODÈLES) ===
 
-model_lstm_cls = Sequential([
-    Bidirectional(LSTM(64, return_sequences=True, input_shape=(sequence_length, X_seq_cls.shape[2]))),
-    Dropout(0.3),
-    Bidirectional(LSTM(64)),
-    Dropout(0.3),
-    Dense(32, activation='relu'),
-    Dense(5, activation='softmax')
-])
-model_lstm_cls.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-model_lstm_cls.fit(X_train_cl, y_train_cl, epochs=30, batch_size=32, verbose=0)
+# Fonction classify_5 (déjà dans ton code)
+def classify_5(score):
+    if score <= 25: return "Extreme Fear"
+    elif score <= 45: return "Fear"
+    elif score <= 55: return "Neutral"
+    elif score <= 75: return "Greed"
+    else: return "Extreme Greed"
 
-pred_lstm_cls = np.argmax(model_lstm_cls.predict(X_test_cl), axis=1)
-acc_lstm_cls = (pred_lstm_cls == np.argmax(y_test_cl, axis=1)).mean()
-print("LSTM Accuracy:", round(acc_lstm_cls, 3))
+# PRÉDICTION DEMAIN + HYBRID ENSEMBLE
+last_seq = values_scaled[-sequence_length:].reshape(1, sequence_length, 1)
+pred_score = float(scaler.inverse_transform(model_lstm.predict(last_seq))[0][0])
+pred_class_idx = rf.predict(X_cls.iloc[-1:].values)[0]
+pred_class = le.inverse_transform([pred_class_idx])[0]
+
+score_to_class = classify_5(pred_score)
+
+if score_to_class == pred_class:
+    final_score = pred_score
+    final_class = pred_class
+    confidence = "HAUTE"
+else:
+    class_midpoints = {"Extreme Fear": 12.5, "Fear": 35, "Neutral": 50, "Greed": 65, "Extreme Greed": 87.5}
+    rf_implied_score = class_midpoints[pred_class]
+    final_score = 0.7 * pred_score + 0.3 * rf_implied_score
+    final_class = classify_5(final_score)
+    confidence = "MOYENNE"
+
+# Sauvegarde
+result = {
+    "predicted_score": round(final_score, 1),
+    "predicted_class": final_class,
+    "confidence": confidence,
+    "lstm_score": round(pred_score, 1),
+    "rf_class": pred_class,
+    "mae_lstm": round(mae_lstm, 2),
+    "accuracy_rf": round(acc_rf, 3)
+}
+with open(DATA_DIR / "latest_prediction.json", 'w') as f:
+    json.dump(result, f, indent=2)
+
+print(f"\nPRÉDICTION HYBRID : {final_score:.1f} → {final_class} [{confidence}]")
 
 # =============================================
-# 5. SAUVEGARDE & PRÉDICTION
+# 5. SAUVEGARDE & PRÉDICTION DEMAIN
 # =============================================
-best_reg = "LSTM" if mae_lstm_reg < mae_prophet else "Prophet"
-best_cls = "RF" if acc_rf > acc_lstm_cls else "LSTM"
-
 joblib.dump({
-    'lstm_reg': model_lstm_reg,
-    'prophet': model_prophet,
-    'rf': rf,
-    'lstm_cls': model_lstm_cls,
+    'lstm_regression': model_lstm,
+    'rf_classification': rf,
     'scaler': scaler,
-    'le': le,
+    'label_encoder': le,
     'features': features_cls,
-    'mae_ensemble': mae_ensemble,
+    'mae_lstm': mae_lstm,
     'acc_rf': acc_rf
-}, MODELS_DIR / "full_pipeline.pkl")
+}, MODELS_DIR / "final_models.pkl")
 
 # PRÉDICTION DEMAIN
-last_date = df['timestamp'].iloc[-1] + pd.Timedelta(days=1)
 last_seq = values_scaled[-sequence_length:].reshape(1, sequence_length, 1)
-
-pred_tomorrow_lstm = float(scaler.inverse_transform(model_lstm_reg.predict(last_seq))[0][0])
-future_df = pd.DataFrame({'ds': [last_date]})
-pred_tomorrow_prophet = float(model_prophet.predict(future_df)['yhat'].iloc[0])
-pred_tomorrow = (weight_lstm * pred_tomorrow_lstm + weight_prophet * pred_tomorrow_prophet) / total
-
-# Ensembling classification
-rf_pred = rf.predict_proba(X_cls.iloc[-1:].values)[0]
-lstm_input = df[features_cls].iloc[-sequence_length:].values.reshape(1, sequence_length, -1)
-lstm_pred = model_lstm_cls.predict(lstm_input)[0]
-
-if rf_pred.max() > 0.7:
-    pred_class = le.inverse_transform([np.argmax(rf_pred)])[0]
-elif lstm_pred.max() > 0.8:
-    pred_class = le.inverse_transform([np.argmax(lstm_pred)])[0]
-else:
-    pred_class = "Neutral"
+pred_score = float(scaler.inverse_transform(model_lstm.predict(last_seq))[0][0])
+pred_class_idx = rf.predict(X_cls.iloc[-1:].values)[0]
+pred_class = le.inverse_transform([pred_class_idx])[0]
 
 result = {
-    "predicted_score": round(pred_tomorrow, 1),
+    "predicted_score": round(pred_score, 1),
     "predicted_class": pred_class,
-    "mae_ensemble": round(mae_ensemble, 2),
-    "accuracy_rf": round(acc_rf, 3),
-    "best_regression": best_reg,
-    "best_classification": best_cls
+    "mae_lstm": round(mae_lstm, 2),
+    "accuracy_rf": round(acc_rf, 3)
 }
 with open(DATA_DIR / "latest_prediction.json", 'w') as f:
     json.dump(result, f, indent=2)
 
 # VISUALISATION
 plt.figure(figsize=(14,6))
-plt.plot(df['timestamp'].iloc[-len(y_test_l):], scaler.inverse_transform(y_test_l), label='True', linewidth=2)
-plt.plot(df['timestamp'].iloc[-len(y_test_l):], pred_lstm_reg, label=f'LSTM (MAE={mae_lstm_reg:.2f})', alpha=0.8)
-plt.plot(df['timestamp'].iloc[-len(y_test_l):], pred_prophet, label=f'Prophet (MAE={mae_prophet:.2f})', alpha=0.8)
-plt.plot(df['timestamp'].iloc[-len(y_test_l):], pred_ensemble, label=f'Ensemble (MAE={mae_ensemble:.2f})', linewidth=3, linestyle='--')
-plt.axvline(df['timestamp'].iloc[train_size], color='gray', linestyle=':', label='Train/Test Split')
+plt.plot(df['timestamp'].iloc[-len(y_test):], scaler.inverse_transform(y_test), label='Vrai', linewidth=2)
+plt.plot(df['timestamp'].iloc[-len(y_test):], pred_lstm, label=f'LSTM (MAE={mae_lstm:.2f})', linewidth=2)
+plt.axvline(df['timestamp'].iloc[train_size], color='gray', linestyle=':', label='Train/Test')
 plt.legend()
-plt.title("Hedera Mood Oracle — Regression Comparison")
+plt.title("Hedera Mood Oracle — Prédiction LSTM (Régression)")
 plt.xlabel("Date")
 plt.ylabel("Fear & Greed Index")
 plt.tight_layout()
-plt.savefig(IMAGES_DIR / "regression_final.png", dpi=300)
+plt.savefig(IMAGES_DIR / "lstm_regression_final.png", dpi=300)
 plt.show()
 
-print(f"\nPRÉDICTION DEMAIN : {pred_tomorrow:.1f} → {pred_class}")
-print(f"ENSEMBLE MAE: {mae_ensemble:.2f} | RF ACC: {acc_rf:.3f}")
-print("full_pipeline.pkl + latest_prediction.json sauvegardés")
+print(f"\nPRÉDICTION DEMAIN : {pred_score:.1f} → {pred_class}")
+print(f"LSTM MAE: {mae_lstm:.2f} | RF ACC: {acc_rf:.3f}")
+print("final_models.pkl + latest_prediction.json sauvegardés")
