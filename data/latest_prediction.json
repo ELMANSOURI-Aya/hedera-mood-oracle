@@ -1,6 +1,6 @@
 {
   "predicted_score": 25.0,
-  "predicted_class": "Neutral",
+  "predicted_class": "Extreme Fear",
   "best_regression": "LSTM",
   "best_classification": "RF"
 }
